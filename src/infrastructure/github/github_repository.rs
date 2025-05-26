@@ -1,9 +1,16 @@
 use super::models::{GithubIssue, GithubPageInfo, GithubProjectV2, GithubResponse};
 use reqwest::Client;
 use serde::Serialize;
-use std::error::Error;
+use std::error::Error; // Keep for the internal get_issues, but trait will use anyhow
 
 use super::graphql::{query_issues::QUERY_ISSUES, query_project::QUERY_PROJECT};
+
+// Imports for IssueProvider implementation
+use crate::domain::entities::issue::Issue as DomainIssue;
+use crate::domain::repositories::issue_provider::{IssueProvider, PageInfo as DomainPageInfo};
+use async_trait::async_trait;
+use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc, TimeZone}; // Added TimeZone for parsing
 
 /// GitHub client for interacting with GitHub's GraphQL API
 #[derive(Debug, Clone)]
@@ -51,13 +58,16 @@ impl GitHubRepository {
     }
 
     /// Get issues for a project with pagination
-    pub async fn get_issues(
+    // This is the original method, now effectively internal.
+    // It returns Result with Box<dyn Error> which is fine for internal logic.
+    // The trait implementation will wrap this and convert errors to anyhow::Error.
+    async fn get_issues_from_github(
         &self,
         project_number: i32,
         limit: Option<i32>,
         after: Option<String>,
     ) -> Result<(Vec<GithubIssue>, GithubPageInfo), Box<dyn Error>> {
-        println!("project_number: {}", project_number);
+        // println!("project_number: {}", project_number); // Original println
         let variables = serde_json::json!({
             "organization": self.organization,
             "projectNumber": project_number,
@@ -75,7 +85,7 @@ impl GitHubRepository {
 
         let issues = response.get_issues();
         let page_info = response.get_page_info();
-        println!("Número de issues obtenidos {}", issues.len());
+        // println!("Número de issues obtenidos {}", issues.len()); // Original println
 
         Ok((issues, page_info))
     }
@@ -114,5 +124,60 @@ impl GitHubRepository {
         let repsonse: GithubResponse = serde_json::from_value(response_body)?;
 
         Ok(repsonse)
+    }
+}
+
+#[async_trait]
+impl IssueProvider for GitHubRepository {
+    async fn fetch_issues(
+        &self,
+        project_number_str: &str,
+        limit: Option<i32>,
+        after_cursor: Option<String>,
+    ) -> Result<(Vec<DomainIssue>, DomainPageInfo)> {
+        // 1. Parse project_number_str to i32
+        let project_number = project_number_str
+            .parse::<i32>()
+            .map_err(|e| anyhow!("Invalid project number string: {}. Error: {}", project_number_str, e))?;
+
+        // 2. Call the existing internal logic to fetch issues from GitHub
+        let (github_issues, github_page_info) = self
+            .get_issues_from_github(project_number, limit, after_cursor) // Calling the original method, renamed for clarity
+            .await
+            .map_err(|e| anyhow!("Failed to fetch issues from GitHub for project {}: {}", project_number, e))?;
+
+        // 3. Transform GitHub issues (super::models::GithubIssue) to domain issues (DomainIssue)
+        let domain_issues: Vec<DomainIssue> = github_issues
+            .into_iter()
+            .map(|gh_issue| {
+                // Transform GithubIssue to DomainIssue
+                // The fields `number` and `body` are now available in `gh_issue` due to previous subtask.
+                DomainIssue {
+                    id: None, // Will be set by the database layer
+                    title: gh_issue.title.unwrap_or_default(),
+                    body: gh_issue.body.clone(), // Updated mapping for body
+                    status: gh_issue.state, // `state` in GithubIssue seems to map to `status`
+                    number: gh_issue.number.unwrap_or(0), // Updated mapping for number
+                    project_id: None, // This will be set by the use case or when saving
+                    snapshot_id: None, // This will be set by the use case
+                    created_at: gh_issue.created_at.as_ref().map_or_else(Utc::now, |dt_str| {
+                        DateTime::parse_from_rfc3339(dt_str)
+                            .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc))
+                    }),
+                    updated_at: gh_issue.updated_at.as_ref().map_or_else(Utc::now, |dt_str| {
+                        DateTime::parse_from_rfc3339(dt_str)
+                            .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc))
+                    }),
+                }
+            })
+            .collect();
+
+        // 4. Transform GitHub page info (super::models::GithubPageInfo) to domain page info (DomainPageInfo)
+        let domain_page_info = DomainPageInfo {
+            has_next_page: github_page_info.has_next_page,
+            end_cursor: github_page_info.end_cursor,
+        };
+
+        Ok((domain_issues, domain_page_info))
     }
 }

@@ -6,6 +6,8 @@ pub struct GithubIssue {
     pub id: Option<String>,
     pub url: Option<String>,
     pub title: Option<String>,
+    pub body: Option<String>, // Added body
+    pub number: Option<i32>, // Added number (GitHub issue numbers are i32)
     pub state: Option<String>,
     pub state_reason: Option<String>,
     pub labels: Option<GithubLabels>,

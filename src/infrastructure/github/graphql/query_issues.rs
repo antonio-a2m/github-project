@@ -19,6 +19,7 @@ query($organization: String!, $projectNumber: Int!, $after: String, $limit: Int)
               id
               url
               title
+              body # Added body
               state
               number
               createdAt

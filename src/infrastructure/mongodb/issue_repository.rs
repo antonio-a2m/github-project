@@ -1,86 +1,72 @@
-use super::issue_model::IssueModel;
-use crate::infrastructure::github::github_repository::GitHubRepository;
+use async_trait::async_trait;
 use mongodb::{
-    bson::oid::ObjectId, error::Result as MongoResult, options::InsertManyOptions, Collection,
-    Database,
+    bson::{doc, oid::ObjectId, DateTime as BsonDateTime}, // BsonDateTime not strictly needed here if From traits handle it
+    options::InsertManyOptions,
+    Collection, Database, // InsertManyResult is part of the output of insert_many directly
 };
-use std::error::Error;
-use tokio::time::{sleep, Duration};
+use anyhow::{Result, Context}; // anyhow is not used in the final snippet, but Context is.
+use futures::TryStreamExt; // For cursor.try_next()
+
+use crate::domain::entities::issue::Issue as DomainIssue;
+use crate::domain::repositories::issue_repository::IssueRepository as DomainIssueRepository;
+use super::issue_model::IssueModel;
 
 pub struct IssueRepository {
     collection: Collection<IssueModel>,
-    github_repository: GitHubRepository,
-    snapshot_id: ObjectId,
 }
 
 impl IssueRepository {
-    pub fn new(db: &Database, github_repository: GitHubRepository, snapshot_id: ObjectId) -> Self {
+    pub fn new(db: &Database) -> Self {
         let collection = db.collection::<IssueModel>("issues");
-        Self {
-            collection,
-            github_repository,
-            snapshot_id,
-        }
+        Self { collection }
     }
+}
 
-    pub async fn insert_many(&self, issues: Vec<IssueModel>) -> MongoResult<Vec<String>> {
+#[async_trait]
+impl DomainIssueRepository for IssueRepository {
+    async fn save_issues(&self, domain_issues: Vec<DomainIssue>) -> Result<Vec<String>> {
+        if domain_issues.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // The From<DomainIssue> for IssueModel is already implemented in issue_model.rs
+        let issue_models: Vec<IssueModel> = domain_issues
+            .into_iter()
+            .map(IssueModel::from) 
+            .collect();
+
         let options = InsertManyOptions::builder().ordered(false).build();
         let result = self
             .collection
-            .insert_many(issues)
+            .insert_many(issue_models)
             .with_options(options)
-            .await?;
+            .await
+            .context("Failed to insert issues into MongoDB")?;
 
         let ids = result
             .inserted_ids
             .values()
-            .map(|id| id.as_object_id().unwrap().to_hex())
+            .map(|id| id.as_object_id().expect("Expected ObjectId from MongoDB insertion").to_hex())
             .collect();
         Ok(ids)
     }
 
-    pub async fn insert_from_github_project(
-        &self,
-        project_number: i32,
-    ) -> Result<(), Box<dyn Error>> {
-        let limit = 100;
-        let mut after = "".to_string();
+    async fn get_issues_by_snapshot_id(&self, snapshot_id: ObjectId) -> Result<Vec<DomainIssue>> {
+        let mut cursor = self
+            .collection
+            .find(doc! { "snapshot_id": snapshot_id }, None)
+            .await
+            .context(format!("Failed to find issues by snapshot_id: {}", snapshot_id))?;
 
-        loop {
-            let (issues_page, page_info) = self
-                .github_repository
-                .get_issues(project_number, Some(limit), Some(after))
-                .await?;
-            // Check if issues_page is empty and break the loop
-            if issues_page.is_empty() {
-                println!("No more issues found for project #{}", project_number);
-                break;
-            }
-            // Convert GitHub issues to IssueModel and batch insert them
-            let issue_models: Vec<IssueModel> = issues_page
-                .into_iter()
-                .map(|issue| IssueModel::from_issue(issue, self.snapshot_id))
-                .collect();
-
-            if !issue_models.is_empty() {
-                // Store the length before moving issue_models
-                let issues_count = issue_models.len();
-                // Insert the issue models in batch
-                self.insert_many(issue_models).await?;
-                println!(
-                    "Inserted {} issues for project #{}",
-                    issues_count, project_number
-                );
-            }
-
-            if !page_info.has_next_page {
-                break;
-            }
-
-            after = page_info.end_cursor.unwrap_or_default();
-            sleep(Duration::from_secs(1)).await;
+        let mut issues = Vec::new();
+        // The From<IssueModel> for DomainIssue is already implemented in issue_model.rs
+        while let Some(model) = cursor
+            .try_next()
+            .await
+            .context("Error iterating over issue models from MongoDB cursor")? 
+        {
+            issues.push(DomainIssue::from(model)); 
         }
-
-        Ok(())
+        Ok(issues)
     }
 }

@@ -2,7 +2,7 @@ use crate::infrastructure::github::models::{GithubIssue, GithubUser};
 use bson::DateTime;
 use mongodb::bson::oid::ObjectId; // Added import for ObjectId
 use serde::{Deserialize, Serialize};
-use utils::string_to_bson_datetime::string_to_bson_datetime;
+use crate::utils::string_to_bson_datetime::string_to_bson_datetime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,9 +116,9 @@ impl IssueModel {
             end_date,
             hours,
             assigned,
-            created_at: string_to_bson_datetime(issue.created_at),
-            updated_at: string_to_bson_datetime(issue.updated_at),
-            closed_at: string_to_bson_datetime(issue.closed_at),
+            created_at: string_to_bson_datetime(&issue.created_at.unwrap_or_default()).unwrap(),
+            updated_at: string_to_bson_datetime(&issue.updated_at.unwrap_or_default()).unwrap(),
+            closed_at: issue.closed_at.map(|date| string_to_bson_datetime(&date).unwrap()),
         }
     }
 }

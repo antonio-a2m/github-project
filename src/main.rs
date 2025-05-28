@@ -12,6 +12,15 @@ use utils::env::{load_env_config, EnvConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 2 {
+        eprintln!("Usage: {} <project_number>", args[0]);
+        std::process::exit(1);
+    }
+    let project_number = args[1]
+        .parse()
+        .expect("Project number must be a positive integer");
+
     //lectura de variables de entorno
     let env: EnvConfig = load_env_config()?;
 
@@ -26,16 +35,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // leer el proyecto desde base de datos
     let project_repository = ProjectRepository::new(&database, github_repository.clone());
-    let project_info = project_repository
-        .find_or_create(env.github_project_number)
-        .await?;
+    let project_info = project_repository.find_or_create(project_number).await?;
     let project_id = project_info.id.clone();
     println!("project_id: {:?}", project_id);
 
     // crear snapshot
     let snapshot_repository = SnapshotRepository::new(&database);
     let snapshot = snapshot_repository
-        .create(env.github_project_number, project_id)
+        .create(project_number, project_id)
         .await?;
 
     // leer issues
@@ -43,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         issue_repository::IssueRepository::new(&database, github_repository, snapshot.id.clone());
 
     issue_repository
-        .insert_from_github_project(env.github_project_number)
+        .insert_from_github_project(project_number)
         .await?;
 
     Ok(())

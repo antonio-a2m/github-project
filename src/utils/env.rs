@@ -8,7 +8,6 @@ pub struct EnvConfig {
     pub github_api_url: String,
     pub github_token: String,
     pub github_owner: String,
-    pub github_project_number: i32,
 }
 
 pub fn load_env_config() -> Result<EnvConfig, String> {
@@ -25,10 +24,6 @@ pub fn load_env_config() -> Result<EnvConfig, String> {
         .map_err(|_| "Error loading GITHUB_TOKEN env variable".to_string())?;
     let github_owner = env::var("GITHUB_OWNER")
         .map_err(|_| "Error loading GITHUB_OWNER env variable".to_string())?;
-    let github_project_number = env::var("GITHUB_PROJECT_NUMBER")
-        .map_err(|_| "Error loading GITHUB_PROJECT_NUMBER env variable".to_string())?
-        .parse::<i32>()
-        .map_err(|_| "Error parsing GITHUB_PROJECT_NUMBER env variable as i32".to_string())?;
 
     Ok(EnvConfig {
         mongodb_uri,
@@ -36,6 +31,5 @@ pub fn load_env_config() -> Result<EnvConfig, String> {
         github_api_url,
         github_token,
         github_owner,
-        github_project_number,
     })
 }
